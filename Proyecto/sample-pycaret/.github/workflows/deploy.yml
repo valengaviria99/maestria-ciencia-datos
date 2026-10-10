@@ -1,4 +1,4 @@
-name: Build and Deploy
+name: Test, Build and Deploy to Azure
 
 on:
   push:
@@ -7,52 +7,106 @@ on:
   workflow_dispatch:
 
 env:
-  DOCKER_IMAGE: avila196/pycaret-project
-  # Set these in your repo's Variables (Settings > Secrets and variables > Actions > Variables)
-  GCP_REGION: ${{ vars.GCP_REGION }}           # e.g. us-central1
-  CLOUD_RUN_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }} # e.g. pycaret-app
+  IMAGE_NAME: sample-pycaret
+  WEBAPP_NAME: sample-pycaret-valen
+  PROJECT_PATH: ./Proyecto/sample-pycaret
 
 jobs:
   build-and-deploy:
-    name: Build, Push & Deploy
+    name: Test, Build, Push and Deploy
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: read
+
     steps:
-      - name: Checkout
+      # 1. Descargar el repositorio
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set image tag
-        id: tag
-        run: echo "tag=${{ env.DOCKER_IMAGE }}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+      # 2. Validaciones básicas
+      - name: Validate project files
+        run: |
+          test -f "${{ env.PROJECT_PATH }}/Dockerfile"
+          test -f "${{ env.PROJECT_PATH }}/app.py"
+          test -f "${{ env.PROJECT_PATH }}/requirements.txt"
+          python -m py_compile "${{ env.PROJECT_PATH }}/app.py"
 
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
+      # 3. Configurar Docker
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+      # 4. Construir imagen de prueba
+      - name: Build test image
+        uses: docker/build-push-action@v6
         with:
-          context: .
-          push: true
-          tags: |
-            ${{ steps.tag.outputs.tag }}
-            ${{ env.DOCKER_IMAGE }}:latest
+          context: ${{ env.PROJECT_PATH }}
+          file: ${{ env.PROJECT_PATH }}/Dockerfile
+          load: true
+          push: false
+          tags: sample-pycaret:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      # 5. Probar que el contenedor responda
+      - name: Run container validation test
+        shell: bash
+        run: |
+          docker run -d \
+            --name sample-pycaret-test \
+            -p 5000:5000 \
+            sample-pycaret:test
 
-      - name: Deploy to Cloud Run
-        uses: google-github-actions/deploy-cloudrun@v2
+          APP_READY=false
+
+          for attempt in {1..30}; do
+            if curl --fail --silent http://localhost:5000 > /dev/null; then
+              APP_READY=true
+              break
+            fi
+
+            echo "Esperando que la aplicación inicie: intento $attempt de 30"
+            sleep 5
+          done
+
+          if [ "$APP_READY" != "true" ]; then
+            echo "La aplicación no respondió correctamente."
+            docker logs sample-pycaret-test
+            docker rm -f sample-pycaret-test
+            exit 1
+          fi
+
+          echo "La aplicación respondió correctamente."
+          docker rm -f sample-pycaret-test
+
+      # 6. Iniciar sesión en Azure Container Registry
+      - name: Log in to Azure Container Registry
+        uses: docker/login-action@v4
         with:
+          registry: ${{ secrets.ACR_LOGIN_SERVER }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      # 7. Construir y publicar la imagen en ACR
+      - name: Build and push image to ACR
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.PROJECT_PATH }}
+          file: ${{ env.PROJECT_PATH }}/Dockerfile
+          push: true
+          tags: |
+            ${{ secrets.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ secrets.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # 8. Desplegar la nueva imagen en Azure App Service
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ env.WEBAPP_NAME }}
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          images: ${{ secrets.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
           service: ${{ env.CLOUD_RUN_SERVICE }}
           region: ${{ env.GCP_REGION }}
           image: ${{ steps.tag.outputs.tag }}
