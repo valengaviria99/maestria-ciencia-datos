@@ -1,0 +1,32 @@
+[general]
+chat_models = ["gpt-3.5-turbo", "gpt-4"]
+model = "gpt-3.5-turbo"
+temperature = 0
+
+[prompts]
+instruction_prompt = """
+Remove personally identifiable information, only show the date,
+and replace all swear words with "😤"
+
+Example Input:
+[support_tom] 2023-07-24T10:02:23+00:00 : What can I help you with?
+[johndoe] 2023-07-24T10:03:15+00:00 : I CAN'T CONNECT TO MY BLASTED ACCOUNT
+
+Example Output:
+[Agent] 2023-07-24 : What can I help you with?
+[Customer] 2023-07-24 : I CAN'T CONNECT TO MY 😤 ACCOUNT
+"""
+role_prompt = """
+"""
+positive_example = """
+"""
+positive_reasoning = """
+"""
+positive_output = """
+"""
+negative_example = """
+"""
+negative_reasoning = """
+"""
+negative_output = """
+"""
