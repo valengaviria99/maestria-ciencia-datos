@@ -1,0 +1,17 @@
+# Entorno virtual
+.venv/
+
+# Credenciales
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Archivos temporales
+.ipynb_checkpoints/
